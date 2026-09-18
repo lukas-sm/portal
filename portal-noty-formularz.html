@@ -1,0 +1,1175 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portal Kontrahenta - Noty (wariant formularza)</title>
+
+<!--
+  Portal Noty - wariant „formularz".
+
+  Druga wersja modułu „Reklamacje / Noty". Reguły są te same co w
+  portal-noty.html, inny jest układ: zamiast czterokrokowego kreatora
+  jedna strona ułożona tak, jak działający już formularz przesyłania
+  dokumentów transportowych, który kontrahenci znają - sekcje jedna pod
+  drugą, jedno pole na komplet załączników, pasek łącznego rozmiaru,
+  panel „Status płatności" z boku i dwa okna dialogowe na końcu.
+
+  Oba warianty są niezależne - ten plik wczytuje wyłącznie
+  portal-noty-formularz.css i musi leżeć w tym samym katalogu co arkusz.
+
+  Czego wariant NIE robi, tak samo jak wariant kreatora (decyzja D5):
+  nie wysyła maila i nie rejestruje zgłoszenia. Ostatni krok buduje w
+  przeglądarce plik .eml i pobiera go; wysłanie zostaje po stronie
+  użytkownika. Teksty okien dialogowych mówią to wprost - w odróżnieniu
+  od okna „Dokumenty wysłane pomyślnie" z formularza produkcyjnego.
+
+  Jedyne żądanie do sieci to czcionka Poppins. Usunięcie dwóch znaczników
+  <link> do fonts.googleapis.com czyni stronę w pełni offline'ową.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="portal-noty-formularz.css">
+</head>
+
+<body>
+<div class="page">
+
+  <header class="topbar">
+    <span class="brand">
+      <span class="brand-chev" aria-hidden="true">&raquo;</span>
+      <span>
+        <span class="brand-name">TSL</span><br>
+        <span class="brand-sub">SERVICES</span>
+      </span>
+      <span class="brand-chev brand-chev--ink" aria-hidden="true">&raquo;</span>
+    </span>
+    <div class="topbar-info">
+      <span class="dim">Infolinia jest dostępna od wtorku do piątku w godzinach 11:00-16:00.</span>
+      <span class="strong">22 112 07 07</span>
+      <a href="mailto:cs@tslservices.pl" class="strong">cs@tslservices.pl</a>
+      <span class="dim">PL</span>
+    </div>
+  </header>
+
+  <main class="main" id="app"></main>
+
+  <footer class="footer">
+    <div class="wrap footer-grid">
+      <div>
+        <div class="footer-head">Biuro</div>
+        <div class="footer-body">TSL Services Sp. z o.o.<br>ul. Bohomolca 21<br>01-613 Warszawa, Polska</div>
+      </div>
+      <div>
+        <div class="footer-head">Bądźmy w kontakcie</div>
+        <div class="footer-body">telefon: + 48 22 112 07 07<br>mail: cs@tslservices.pl</div>
+      </div>
+      <div class="footer-right">
+        <div class="footer-body">Polityka Prywatności<br>RODO: infolinia i e-mail</div>
+        <button class="footer-report" type="button" disabled>Zgłoś problem ze stroną</button>
+      </div>
+    </div>
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ==========================================================================
+     KONFIGURACJA - słowniki i reguły, które zmienia biznes, a nie programista.
+     Wartości te same co w wariancie kreatora (portal-noty.html).
+     ========================================================================== */
+
+  var CONFIG = {
+
+    // Powody obciążenia - pozycje z V-Desk, każda wielką literą, kolejność alfabetyczna.
+    CHARGE_REASONS: [
+      'Anulacja zlecenia',
+      'Brak informacji o statusie',
+      'Brak podstawienia odpowiedniego środka transportu',
+      'Brak podstawienia środka transportu',
+      'Brak wymiany palet',
+      'Kategoria rodzaju obciążenia',
+      'Koszty dodatkowe',
+      'Koszty podjazdu na załadunek',
+      'Koszty wykonania zastępczego',
+      'Kradzież towaru / brakujący towar',
+      'Magazynowanie',
+      'Maty/Pasy/Kątowniki',
+      'Niewykonanie neutralizacji',
+      'Niewywiązanie się z warunków zlecenia',
+      'Opóźnienie w dostarczeniu dokumentacji',
+      'Opóźnienie w płatności',
+      'Postój',
+      'Spóźnienie',
+      'Uszkodzenie towaru'
+    ],
+
+    NOTES_MAILBOX: 'noty@tslservices.pl',
+
+    // Limit łączny załączników. W źródłach rozbieżnie 7 i 10 MB - otwarte pytanie O4.
+    ATTACHMENT_LIMIT_MB: 7,
+    ALLOWED_EXTENSIONS: ['pdf', 'jpg', 'jpeg', 'doc', 'docx'],
+    REQUIRE_ATTACHMENT: true,
+
+    // Jedno pole na komplet dokumentów - nota obciążeniowa i wszystko,
+    // co ją dokumentuje, wrzucane razem.
+    ATTACHMENT_FIELD: {
+      title: 'Załącz dokumenty',
+      mailLabel: 'Załączniki',
+      info: 'Nota obciążeniowa oraz wszystko, co dokumentuje zasadność obciążenia. Możesz dodać kilka plików naraz.'
+    },
+
+    // true zrównuje klienta z przewoźnikiem: powód obciążenia staje się obowiązkowy
+    // także dla klienta. Domyślnie false - dla klienta to pole pozostaje nieobowiązkowe.
+    STRICT_CLIENT_FIELDS: false,
+
+    // Zaślepka weryfikacji NIP (decyzja D4). Ta jedna wartość jest odrzucana,
+    // każda inna niepusta przechodzi. Kontroli formatu celowo nie ma.
+    INVALID_NIP: '1',
+
+    // Pytanie z ankiety, którą formularz dokumentów pokazuje po wysyłce.
+    SURVEY_QUESTION: 'Jak łatwe było dla Ciebie przygotowanie zgłoszenia?',
+    SURVEY_OPTIONS: ['bardzo łatwe', 'łatwe', 'ani łatwe ani trudne', 'trudne', 'bardzo trudne']
+  };
+
+  /* ==========================================================================
+     STAN
+     ========================================================================== */
+
+  function emptyState() {
+    return {
+      role: '',
+      nip: '', clientOrder: '', carrierOrder: '', captcha: false,
+      // Dalsza część formularza odsłania się dopiero po przejściu weryfikacji -
+      // tak jak w formularzu dokumentów transportowych.
+      verified: false,
+      forwarder: '', reason: '', amount: '', currency: '',
+      bankAccount: '', email: '', notes: '',
+      files: [], rodo: false, errors: {},
+      modal: '', survey: '', surveySent: false
+    };
+  }
+
+  var state = emptyState();
+
+  // Krótki komunikat u dołu ekranu. Poza stanem formularza, bo nie jest daną zgłoszenia.
+  var toast = '';
+  var toastTimer = null;
+
+  /* ==========================================================================
+     NARZĘDZIA
+     ========================================================================== */
+
+  function esc(value) {
+    return String(value === null || value === undefined ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function notice(text) {
+    toast = text;
+    render();
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () {
+      toast = '';
+      render();
+    }, 7000);
+  }
+
+  // Odmiana rzeczownika przy liczebniku: 1 plik, 2-4 pliki, 5 i więcej plików.
+  // Liczby 12-14 idą z resztą, stąd drugi warunek.
+  function fileCountLabel(count) {
+    if (count === 1) return '1 plik';
+    var last = count % 10;
+    var twoLast = count % 100;
+    var few = last >= 2 && last <= 4 && (twoLast < 12 || twoLast > 14);
+    return count + (few ? ' pliki' : ' plików');
+  }
+
+  /* ==========================================================================
+     REGUŁY - czyste funkcje, bez dostępu do DOM
+     ========================================================================== */
+
+  // Poziom wymagań: przewoźnik zawsze, klient tylko przy włączonym zaostrzeniu.
+  function carrierLevel(role) {
+    return role === 'PRZEWOZNIK' || CONFIG.STRICT_CLIENT_FIELDS === true;
+  }
+
+  // Czy pole jest obowiązkowe dla danej roli. Powód obciążenia obowiązuje przewoźnika;
+  // numery zleceń, kwota, waluta, numer konta i uwagi są nieobowiązkowe dla obu ról.
+  var OPTIONAL_FIELDS = ['clientOrder', 'carrierOrder', 'amount', 'currency', 'bankAccount', 'notes'];
+
+  function requiredFor(role, field) {
+    if (field === 'reason') return carrierLevel(role);
+    return OPTIONAL_FIELDS.indexOf(field) < 0;
+  }
+
+  function normalizeNip(value) {
+    return String(value || '').replace(/[\s-]/g, '');
+  }
+
+  // Zaślepka weryfikacji (D4). Zwraca komunikat błędu albo pusty łańcuch.
+  function checkNip(value) {
+    var nip = normalizeNip(value);
+    if (!nip) return 'Podaj NIP wystawcy dokumentu.';
+    if (nip === CONFIG.INVALID_NIP) return 'NIP nie jest poprawny.';
+    return '';
+  }
+
+  function fileExt(name) {
+    var parts = String(name || '').split('.');
+    return parts.length > 1 ? parts.pop().toLowerCase() : '';
+  }
+
+  function extAllowed(ext) {
+    return CONFIG.ALLOWED_EXTENSIONS.indexOf(ext) > -1;
+  }
+
+  function extList() {
+    return CONFIG.ALLOWED_EXTENSIONS.map(function (ext) { return '.' + ext; }).join(', ');
+  }
+
+  function acceptAttr() {
+    return CONFIG.ALLOWED_EXTENSIONS.map(function (ext) { return '.' + ext; }).join(',');
+  }
+
+  function acceptedFiles(files) {
+    return files.filter(function (file) { return file.valid; });
+  }
+
+  function totalBytes(files) {
+    return acceptedFiles(files).reduce(function (sum, file) { return sum + file.size; }, 0);
+  }
+
+  function limitBytes() {
+    return CONFIG.ATTACHMENT_LIMIT_MB * 1024 * 1024;
+  }
+
+  function mb(bytes) {
+    return (bytes / 1048576).toFixed(2);
+  }
+
+  // Rozmiar pojedynczego pliku. Poniżej 0,01 MB podajemy kilobajty, żeby na
+  // liście załączników nie stało „0.00 MB".
+  function sizeLabel(bytes) {
+    return bytes < 10240 ? Math.max(1, Math.round(bytes / 1024)) + ' KB' : mb(bytes) + ' MB';
+  }
+
+  function overLimit(files) {
+    return totalBytes(files) > limitBytes();
+  }
+
+  function limitLabel() {
+    return CONFIG.ATTACHMENT_LIMIT_MB + ' MB';
+  }
+
+  function hasRequiredAttachment(s) {
+    if (!CONFIG.REQUIRE_ATTACHMENT) return true;
+    return acceptedFiles(s.files).length > 0;
+  }
+
+  // Weryfikacja otwierająca formularz. Dalsza część pól pokazuje się dopiero,
+  // gdy te trzy warunki są spełnione - numer zlecenia pozostaje nieobowiązkowy.
+  function validateVerification(s) {
+    var errors = {};
+    if (!s.role) errors.role = 'Wskaż, czy jesteś klientem, czy przewoźnikiem.';
+    var nipError = checkNip(s.nip);
+    if (nipError) errors.nip = nipError;
+    if (!s.captcha) errors.captcha = 'Potwierdź, że nie jesteś automatem.';
+    return errors;
+  }
+
+  // Walidacja całego formularza - wariant nie dzieli pól na kroki.
+  // Zwraca obiekt: nazwa pola -> komunikat.
+  function validate(s) {
+    var errors = validateVerification(s);
+
+    if (!s.forwarder.trim()) errors.forwarder = 'Podaj imię i nazwisko spedytora.';
+
+    if (requiredFor(s.role, 'reason') && !s.reason) {
+      errors.reason = 'Wskaż powód obciążenia - dla przewoźnika jest obowiązkowy.';
+    }
+
+    if (s.amount.trim() && !/^\d+([.,]\d{1,2})?$/.test(s.amount.replace(/\s/g, ''))) {
+      errors.amount = 'Kwota jest nieobowiązkowa - jeśli ją podajesz, wpisz samą liczbę, ' +
+        'na przykład 1234,56, bez symbolu waluty.';
+    }
+
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s.email)) {
+      errors.email = 'Podaj adres e-mail - na niego przygotujemy potwierdzenie.';
+    }
+
+    if (!hasRequiredAttachment(s)) {
+      errors.files = 'Załącz dokumenty - bez noty obciążeniowej zgłoszenie nie jest przyjmowane.';
+    } else if (overLimit(s.files)) {
+      errors.files = 'Łączny rozmiar plików przekracza limit ' + limitLabel() + '.';
+    }
+
+    if (!s.rodo) errors.rodo = 'Zaakceptuj klauzulę przetwarzania danych.';
+
+    return errors;
+  }
+
+  // Czego brakuje do wysyłki. Formularz dokumentów wygasza przycisk „Wyślij"
+  // bez wyjaśnienia - tutaj powód stoi wypisany w ramce nad przyciskiem.
+  function blockers(s) {
+    var list = [];
+    if (!hasRequiredAttachment(s)) list.push('Pamiętaj, aby załączyć notę obciążeniową - bez niej zgłoszenie nie zostanie zarejestrowane.');
+    if (overLimit(s.files)) list.push('Łączny rozmiar plików przekracza limit ' + limitLabel() + '. Usuń lub zmniejsz załączniki.');
+    if (!s.rodo) list.push('Zaznacz zgodę na przetwarzanie danych osobowych.');
+    return list;
+  }
+
+  // Numer zlecenia zgodny z rolą nadawcy. Pole jest nieobowiązkowe,
+  // więc temat musi znieść jego brak.
+  function orderLabel(s) {
+    return (s.role === 'KLIENT' ? s.clientOrder : s.carrierOrder).trim() || 'BRAK';
+  }
+
+  function roleLabel(role) {
+    if (role === 'PRZEWOZNIK') return 'Przewoźnik';
+    if (role === 'KLIENT') return 'Klient';
+    return '-';
+  }
+
+  // Konwencja tematu z punktu 8.2 analizy.
+  function buildSubject(s) {
+    return 'Nota | ' + (s.role ? roleLabel(s.role) : '[ROLA]') +
+      ' | NIP ' + (normalizeNip(s.nip) || '[nip]') +
+      ' | zlecenie ' + orderLabel(s);
+  }
+
+  // Treść maila w stałym układzie etykieta - wartość. Ta sama tablica zasila
+  // podgląd w oknie dialogowym i treść wiadomości .eml.
+  function buildBody(s) {
+    var rows = [
+      { k: 'Rola nadawcy', v: roleLabel(s.role) },
+      { k: 'NIP wystawcy', v: normalizeNip(s.nip) || '-' },
+      (s.role === 'KLIENT'
+        ? { k: 'Numer zlecenia klienta', v: s.clientOrder.trim() || '-' }
+        : { k: 'Numer zlecenia przewoźnika', v: s.carrierOrder.trim() || '-' }),
+      { k: 'Imię i nazwisko spedytora', v: s.forwarder.trim() || '-' },
+      { k: 'Powód obciążenia', v: s.reason || '-' },
+      { k: 'Kwota', v: s.amount.trim() ? s.amount.trim() + ' ' + s.currency : '-' },
+      { k: 'Numer konta bankowego', v: s.bankAccount.trim() || '-' },
+      { k: 'Adres e-mail nadawcy', v: s.email.trim() || '-' },
+      { k: 'Uwagi', v: s.notes.trim() || '-' }
+    ];
+
+    var files = acceptedFiles(s.files);
+    if (files.length) {
+      rows.push({
+        k: CONFIG.ATTACHMENT_FIELD.mailLabel,
+        v: files.map(function (file) { return file.name; }).join(', ')
+      });
+    }
+
+    rows.push({
+      k: 'Łączny rozmiar załączników',
+      v: acceptedFiles(s.files).length ? sizeLabel(totalBytes(s.files)) : '-'
+    });
+
+    return rows;
+  }
+
+  function bodyText(s) {
+    return buildBody(s).map(function (row) { return row.k + ': ' + row.v; }).join('\n');
+  }
+
+  // Treść w HTML - z pogrubionymi nazwami pól. Używa jej wiadomość .eml.
+  function bodyHtml(s) {
+    var rows = buildBody(s).map(function (row) {
+      return '<tr>' +
+        '<td style="padding:2px 16px 2px 0;vertical-align:top;white-space:nowrap">' +
+          '<strong>' + esc(row.k) + ':</strong></td>' +
+        '<td style="padding:2px 0;vertical-align:top">' + esc(row.v) + '</td>' +
+        '</tr>';
+    }).join('');
+
+    return '<html><body style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#1c2536">' +
+      '<table cellspacing="0" cellpadding="0">' + rows + '</table>' +
+      '</body></html>';
+  }
+
+  /* ==========================================================================
+     WIADOMOŚĆ .EML
+     ========================================================================== */
+
+  // Wiadomość MIME rozdziela wiersze parą CR LF.
+  var CRLF = '\r\n';
+
+  var MIME_TYPES = {
+    pdf: 'application/pdf',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  };
+
+  function base64FromText(text) {
+    var bytes = new TextEncoder().encode(text);
+    var binary = '';
+    for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return window.btoa(binary);
+  }
+
+  function base64FromFile(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () { resolve(String(reader.result).split(',')[1] || ''); };
+      reader.onerror = function () { reject(reader.error); };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // Base64 w wiadomości MIME łamie się co 76 znaków.
+  function wrap76(value) {
+    return (value.match(/.{1,76}/g) || []).join(CRLF);
+  }
+
+  function isAscii(value) {
+    return /^[\x20-\x7E]*$/.test(value);
+  }
+
+  // Nagłówki ze znakami spoza ASCII wymagają kodowania z RFC 2047.
+  function encodeHeader(value) {
+    return isAscii(value) ? value : '=?UTF-8?B?' + base64FromText(value) + '?=';
+  }
+
+  function attachmentPart(entry, boundary) {
+    return base64FromFile(entry.file).then(function (data) {
+      var type = MIME_TYPES[entry.ext] || 'application/octet-stream';
+      var plain = isAscii(entry.name);
+      var name = plain ? entry.name : encodeHeader(entry.name);
+      var disposition = plain
+        ? 'attachment; filename="' + entry.name + '"'
+        : "attachment; filename*=UTF-8''" + encodeURIComponent(entry.name);
+
+      return '--' + boundary + CRLF +
+        'Content-Type: ' + type + '; name="' + name + '"' + CRLF +
+        'Content-Transfer-Encoding: base64' + CRLF +
+        'Content-Disposition: ' + disposition + CRLF + CRLF +
+        wrap76(data) + CRLF;
+    });
+  }
+
+  // Wiadomość w formacie RFC 822. Nagłówek X-Unsent sprawia, że Outlook
+  // otwiera plik jako wiadomość do wysłania, a nie jako odebraną.
+  function buildEml(s) {
+    var boundary = 'granica-' + Date.now();
+
+    var head = 'To: ' + CONFIG.NOTES_MAILBOX + CRLF +
+      'Subject: ' + encodeHeader(buildSubject(s)) + CRLF +
+      'X-Unsent: 1' + CRLF +
+      'MIME-Version: 1.0' + CRLF +
+      'Content-Type: multipart/mixed; boundary="' + boundary + '"' + CRLF + CRLF;
+
+    var body = '--' + boundary + CRLF +
+      'Content-Type: text/html; charset="UTF-8"' + CRLF +
+      'Content-Transfer-Encoding: base64' + CRLF + CRLF +
+      wrap76(base64FromText(bodyHtml(s))) + CRLF;
+
+    var attachments = acceptedFiles(s.files).filter(function (entry) { return entry.file; });
+
+    return Promise.all(attachments.map(function (entry) {
+      return attachmentPart(entry, boundary);
+    })).then(function (parts) {
+      return head + body + parts.join('') + '--' + boundary + '--' + CRLF;
+    });
+  }
+
+  function emlFileName(s) {
+    var base = 'Nota-' + (normalizeNip(s.nip) || 'bez-nipu') + '-' +
+      new Date().toISOString().slice(0, 10);
+    return base.replace(/[^A-Za-z0-9-]/g, '-') + '.eml';
+  }
+
+  /* ==========================================================================
+     WIDOKI - funkcje zwracające HTML
+     ========================================================================== */
+
+  function errLine(name) {
+    return state.errors[name]
+      ? '<div class="err" id="e-' + name + '">' + esc(state.errors[name]) + '</div>'
+      : '';
+  }
+
+  // Powiązanie pola z komunikatem błędu dla czytników ekranu.
+  function errAttrs(name) {
+    return state.errors[name] ? ' aria-invalid="true" aria-describedby="e-' + name + '"' : '';
+  }
+
+  function infoDot(text) {
+    return text ? '<i class="info-dot" title="' + esc(text) + '" aria-label="' + esc(text) + '">i</i>' : '';
+  }
+
+  function labelHtml(id, cfg) {
+    return '<label class="label" for="' + id + '">' +
+      '<span>' + esc(cfg.label) + (cfg.required ? ' <span class="req">*</span>' : '') + '</span>' +
+      infoDot(cfg.info) +
+      '</label>';
+  }
+
+  function hintHtml(cfg) {
+    return cfg.hint
+      ? '<div class="field-hint' + (cfg.hintAlert ? ' field-hint--alert' : '') + '">' + esc(cfg.hint) + '</div>'
+      : '';
+  }
+
+  function textField(cfg) {
+    var id = 'f-' + cfg.name;
+    return '<div class="field">' +
+      labelHtml(id, cfg) +
+      '<input class="input" id="' + id + '" name="' + cfg.name + '" type="' + (cfg.type || 'text') + '"' +
+        ' value="' + esc(cfg.value) + '"' +
+        (cfg.placeholder ? ' placeholder="' + esc(cfg.placeholder) + '"' : '') +
+        (cfg.disabled ? ' disabled' : '') +
+        errAttrs(cfg.name) + '>' +
+      hintHtml(cfg) + errLine(cfg.name) +
+      '</div>';
+  }
+
+  function textareaField(cfg) {
+    var id = 'f-' + cfg.name;
+    return '<div class="field">' +
+      labelHtml(id, cfg) +
+      '<textarea class="textarea" id="' + id + '" name="' + cfg.name + '" rows="' + (cfg.rows || 3) + '"' +
+        errAttrs(cfg.name) + '>' + esc(cfg.value) + '</textarea>' +
+      hintHtml(cfg) + errLine(cfg.name) +
+      '</div>';
+  }
+
+  function selectField(cfg) {
+    var id = 'f-' + cfg.name;
+    var options = '<option value="">' + esc(cfg.placeholder) + '</option>';
+    cfg.options.forEach(function (option) {
+      var value = option.value === undefined ? option : option.value;
+      var text = option.text === undefined ? option : option.text;
+      options += '<option value="' + esc(value) + '"' +
+        (value === cfg.value ? ' selected' : '') + '>' + esc(text) + '</option>';
+    });
+    return '<div class="field">' +
+      labelHtml(id, cfg) +
+      '<select class="select" id="' + id + '" name="' + cfg.name + '"' +
+        (cfg.disabled ? ' disabled' : '') + errAttrs(cfg.name) + '>' +
+        options + '</select>' +
+      hintHtml(cfg) + errLine(cfg.name) +
+      '</div>';
+  }
+
+  function viewIntro() {
+    return '<div class="note">' +
+      '<p>Podaj NIP wystawcy dokumentu oraz numer zlecenia, aby przesłać notę obciążeniową.</p>' +
+      '<p>Maksymalny łączny rozmiar plików to <strong>' + esc(limitLabel()) + '</strong>. ' +
+      'Większe pliki nie zostaną dołączone.</p>' +
+      '<p>Dopuszczone formaty plików: ' + esc(extList()) + '. ' +
+      'Sprawdź, jak zmniejszyć za duże pliki: <a href="#">INSTRUKCJA ZMNIEJSZANIA PLIKÓW</a></p>' +
+      '<p>Nota księgowa nie może zawierać stawki VAT. Jedno zgłoszenie odpowiada jednemu obciążeniu.</p>' +
+      '</div>';
+  }
+
+  // Sekcja otwierająca formularz. Dopóki dane nie przejdą weryfikacji, jest
+  // jedyną widoczną sekcją i kończy się przyciskiem Dalej. Po weryfikacji pola
+  // są zablokowane - tak jak w formularzu dokumentów transportowych - a wraca
+  // się do nich przyciskiem „Zmień dane".
+  function viewVerification() {
+    var locked = state.verified;
+
+    var html = '<div class="card">' +
+      '<div class="card-head">DANE WERYFIKACYJNE</div>';
+
+    html += selectField({
+      name: 'role', label: 'Kim jesteś?', required: true, placeholder: 'Wybierz',
+      value: state.role, disabled: locked,
+      options: [{ value: 'KLIENT', text: 'Klient - zlecam transport dla TSL Services' },
+                { value: 'PRZEWOZNIK', text: 'Przewoźnik - wykonuję transport dla TSL Services' }],
+      info: 'Od roli zależy, które pola są obowiązkowe i który numer zlecenia podajesz.'
+    });
+
+    html += textField({
+      name: 'nip', label: 'NIP', required: true, value: state.nip, disabled: locked,
+      placeholder: 'NIP z dokumentu obciążeniowego',
+      info: 'NIP wystawcy dokumentu obciążeniowego.'
+    });
+
+    // Widoczne jest tylko pole numeru zlecenia zgodne z rolą: klient podaje swój,
+    // przewoźnik swój. Pole jest nieobowiązkowe, ale bez niego zgłoszenia nie da
+    // się powiązać ze zleceniem.
+    if (state.role === 'PRZEWOZNIK') {
+      html += textField({
+        name: 'carrierOrder', label: 'Numer zlecenia przewoźnika', value: state.carrierOrder,
+        placeholder: 'np. 2026/09/0777', disabled: locked,
+        info: 'Numer zlecenia, które otrzymałeś od TSL Services.'
+      });
+    } else {
+      html += textField({
+        name: 'clientOrder', label: 'Numer zlecenia klienta', value: state.clientOrder,
+        placeholder: 'np. 2026/09/1234', disabled: locked,
+        info: 'Numer zlecenia, które przekazałeś do TSL Services.'
+      });
+    }
+
+    html += '<div class="field">' +
+      '<button type="button" class="captcha' + (state.captcha ? ' is-on' : '') + '"' +
+        (locked ? ' disabled' : ' data-action="toggleCaptcha"') + '>' +
+        '<span class="captcha-box" aria-hidden="true">✓</span>' +
+        '<span class="captcha-label">' +
+          (state.captcha ? 'Powodzenie!' : 'Potwierdź, że nie jesteś automatem') +
+        '</span>' +
+        '<span class="captcha-brand">TURNSTILE<br>atrapa w prototypie</span>' +
+      '</button>' + errLine('captcha') +
+      '</div>';
+
+    html += '<p class="legal">Informacje o tym, jak przetwarzamy Twoje dane osobowe, w tym kto jest ' +
+      'administratorem Twoich danych i jakie przysługują Ci prawa, znajdziesz tutaj: ' +
+      '<a href="#">informacja o przetwarzaniu danych TSL Services</a>.</p>';
+
+    html += '<div class="submit-row">' + (locked
+      ? '<button type="button" class="btn btn--ghost" data-action="editVerification">Zmień dane</button>'
+      : '<button type="button" class="btn btn--primary" data-action="verify">Dalej</button>') +
+      '</div>';
+
+    return html + '</div>';
+  }
+
+  function viewCharge() {
+    var html = '<div class="card">' +
+      '<div class="card-head">DANE OBCIĄŻENIA</div>' +
+      '<div class="card-hint">Gwiazdka oznacza pole obowiązkowe. Kwota, waluta, numer konta ' +
+      'bankowego i uwagi są nieobowiązkowe - zgłoszenie przechodzi także bez nich.</div>';
+
+    html += textField({
+      name: 'forwarder', label: 'Imię i nazwisko spedytora', required: true,
+      value: state.forwarder, placeholder: 'osoba prowadząca zlecenie',
+      info: 'Pracownik TSL Services, który prowadzi zlecenie.'
+    });
+
+    html += selectField({
+      name: 'reason', label: 'Powód obciążenia', required: requiredFor(state.role, 'reason'),
+      placeholder: 'Wybierz powód', value: state.reason, options: CONFIG.CHARGE_REASONS,
+      info: 'Lista powodów zgodna ze słownikiem w V-Desk.'
+    });
+
+    html += '<div class="field"><div class="grid">' +
+      textField({ name: 'amount', label: 'Kwota', value: state.amount, placeholder: '0,00' }) +
+      selectField({ name: 'currency', label: 'Waluta', placeholder: 'Wybierz',
+        value: state.currency, options: ['PLN', 'EUR'] }) +
+      '</div></div>';
+
+    html += textField({
+      name: 'bankAccount', label: 'Numer konta bankowego', value: state.bankAccount,
+      placeholder: 'numer NRB',
+      hint: 'NRB musi znaleźć się na załączonym dokumencie.', hintAlert: true
+    });
+
+    html += textareaField({
+      name: 'notes', label: 'Uwagi', value: state.notes, rows: 3,
+      info: 'Wszystko, co ułatwi rozpatrzenie obciążenia.'
+    });
+
+    return html + '</div>';
+  }
+
+  function viewContact() {
+    return '<div class="card">' +
+      '<div class="card-head">DANE KONTAKTOWE</div>' +
+      textField({
+        name: 'email', label: 'Adres e-mail', required: true, value: state.email,
+        placeholder: 'twój e-mail', type: 'email',
+        info: 'Adres, pod którym możemy dopytać o szczegóły zgłoszenia.'
+      }) +
+      '</div>';
+  }
+
+  function viewFileList() {
+    if (!state.files.length) return '';
+
+    var files = state.files.map(function (file, index) {
+      return { file: file, index: index };
+    });
+
+    return '<div class="filelist">' + files.map(function (entry) {
+      var file = entry.file;
+      var meta = file.valid
+        ? sizeLabel(file.size)
+        : 'Format .' + esc(file.ext || '?') + ' odrzucony - dopuszczone ' + esc(extList());
+      return '<div class="fileitem' + (file.valid ? '' : ' fileitem--bad') + '">' +
+        '<span class="file-icon" aria-hidden="true">' + (file.valid ? '📄' : '⚠') + '</span>' +
+        '<span class="file-body">' +
+          '<span class="file-name">' + esc(file.name) + '</span><br>' +
+          '<span class="file-meta">' + meta + '</span>' +
+        '</span>' +
+        '<button type="button" class="file-remove" data-action="removeFile" data-index="' +
+          entry.index + '">Usuń</button>' +
+        '</div>';
+    }).join('') + '</div>';
+  }
+
+  // Jedno pole na komplet dokumentów. Przyjmuje kilka plików naraz,
+  // przyciskiem i przeciągnięciem; kolejne wybory dokładają się do listy.
+  function viewAttachmentField() {
+    var field = CONFIG.ATTACHMENT_FIELD;
+    var count = state.files.length ? fileCountLabel(state.files.length) : 'Nie wybrano plików';
+    var bad = CONFIG.REQUIRE_ATTACHMENT && state.errors.files && !acceptedFiles(state.files).length;
+
+    return '<div class="slot' + (bad ? ' is-bad' : '') + '">' +
+      '<div class="slot-head">' +
+        '<span>' + esc(field.title) +
+          (CONFIG.REQUIRE_ATTACHMENT ? ' <span class="req">*</span>' : '') + '</span>' +
+        infoDot(field.info) +
+      '</div>' +
+      '<div class="slot-pick">' +
+        '<label class="slot-label">' +
+          '<span class="slot-btn">Wybierz pliki</span>' +
+          '<input type="file" multiple accept="' + acceptAttr() + '">' +
+        '</label>' +
+        '<span class="slot-count">' + esc(count) + '</span>' +
+      '</div>' +
+      '<div class="slot-drag">lub przeciągnij i upuść pliki tutaj</div>' +
+      viewFileList() +
+      '</div>';
+  }
+
+  function viewDocuments() {
+    var html = '<div class="card">' +
+      '<div class="card-head">DOKUMENTY</div>' +
+      '<div class="note note--inner">' +
+      '<p>Załącz notę obciążeniową i wszystkie dokumenty potwierdzające obciążenie. ' +
+      'Do jednego pola możesz dodać kilka plików naraz - kolejne wybory dokładają się do listy.</p>' +
+      '</div>';
+
+    html += viewAttachmentField();
+    html += state.errors.files ? '<div class="err" style="margin-top:14px">' + esc(state.errors.files) + '</div>' : '';
+
+    html += '<div class="note note--plain" style="margin:18px 0 0">Pliki zostają w tej karcie przeglądarki. ' +
+      'Nic nie jest nigdzie wysyłane ani zapisywane - trafiają dopiero do wiadomości, ' +
+      'którą pobierzesz na końcu.</div>';
+
+    return html + '</div>';
+  }
+
+  function viewSummary() {
+    var used = totalBytes(state.files);
+    var over = overLimit(state.files);
+    // Przy drobnych plikach pasek i tak pokazuje wąski pasek, żeby było widać,
+    // że coś jest już załączone.
+    var percent = used ? Math.min(100, Math.max(2, Math.round(used / limitBytes() * 100))) : 0;
+    var missing = blockers(state);
+
+    var html = '<div class="card">' +
+      '<div class="card-head">PODSUMOWANIE</div>';
+
+    html += '<div class="meter-row">' +
+      '<span>' + esc(used ? sizeLabel(used) : '0 MB') + '</span>' +
+      '<span>' + esc(CONFIG.ATTACHMENT_LIMIT_MB.toFixed(1)) + ' MB</span>' +
+      '</div>' +
+      '<div class="meter"><div class="meter-fill' + (over ? ' is-over' : '') +
+        '" style="width:' + percent + '%"></div></div>';
+
+    html += '<label class="check">' +
+      '<input type="checkbox" data-action="toggleRodo"' + (state.rodo ? ' checked' : '') + '>' +
+      '<span>Wyrażam zgodę na przetwarzanie danych osobowych podanych w formularzu, w tym danych ' +
+      'spedytora i numeru konta bankowego. Podanie danych jest dobrowolne, ale niezbędne do ' +
+      'przetworzenia zgłoszenia. Zostałem poinformowany, że przysługuje mi prawo dostępu do swoich ' +
+      'danych, możliwości ich poprawienia, żądania zaprzestania ich przetwarzania. Administratorem ' +
+      'danych osobowych jest firma TSL Services Sp. z o.o., ul. Bohomolca 21, 01-613 Warszawa.</span>' +
+      '</label>';
+    html += state.errors.rodo ? '<div class="err" style="margin-top:8px">' + esc(state.errors.rodo) + '</div>' : '';
+
+    html += '<div class="warn">' + (missing.length
+      ? 'Zanim przygotujemy wiadomość:<ul>' + missing.map(function (item) {
+          return '<li>' + esc(item) + '</li>';
+        }).join('') + '</ul>'
+      : 'Sprawdź jeszcze, czy załączone dokumenty potwierdzają zasadność obciążenia. ' +
+        'Braki w dokumentacji mogą wydłużyć rozpatrzenie noty.') +
+      '</div>';
+
+    html += '<div class="submit-row">' +
+      '<button type="button" class="btn btn--primary" data-action="submit"' +
+        (missing.length ? ' disabled' : '') + '>Wyślij</button>' +
+      '</div>';
+
+    return html + '</div>';
+  }
+
+  function viewAside() {
+    return '<aside class="aside">' +
+      '<h2>Status płatności</h2>' +
+      '<p>Chcesz sprawdzić termin i status płatności za fakturę? Kliknij tutaj:</p>' +
+      '<button type="button" class="aside-btn" disabled>SPRAWDŹ PŁATNOŚĆ</button>' +
+      '<p class="aside-foot">Panel jest tu dla kontekstu - w prototypie nie działa.</p>' +
+      '</aside>';
+  }
+
+  function viewConfirmModal() {
+    return '<div class="modal-bg" data-action="closeModal">' +
+      '<div class="modal" data-stop="1" role="dialog" aria-modal="true" aria-label="Potwierdź dodanie dokumentów">' +
+        '<div class="modal-head">' +
+          '<h3>Potwierdź dodanie dokumentów</h3>' +
+          '<button type="button" class="modal-x" data-action="closeModal" aria-label="Zamknij">✕</button>' +
+        '</div>' +
+        '<div class="modal-body">' +
+          '<p>Czy załączono wszystkie dokumenty wymagane do rozpatrzenia obciążenia?</p>' +
+          '<p>Braki w dokumentacji mogą wydłużyć rozpatrzenie noty.</p>' +
+        '</div>' +
+        '<div class="modal-foot">' +
+          '<button type="button" class="btn btn--ghost" data-action="closeModal">Nie</button>' +
+          '<button type="button" class="btn btn--primary" data-action="confirmSubmit">Tak, wyślij</button>' +
+        '</div>' +
+      '</div>' +
+      '</div>';
+  }
+
+  function viewSurvey() {
+    if (state.surveySent) {
+      return '<div class="survey-done">Dziękujemy za ocenę.</div>' +
+        '<div class="survey-note">W prototypie odpowiedź nie jest nigdzie zapisywana ani wysyłana.</div>';
+    }
+
+    var options = CONFIG.SURVEY_OPTIONS.map(function (option) {
+      return '<label class="survey-option">' +
+        '<input type="radio" name="survey" value="' + esc(option) + '"' +
+          (state.survey === option ? ' checked' : '') + '>' +
+        '<span>' + esc(option) + '</span>' +
+        '</label>';
+    }).join('');
+
+    return '<div class="survey-head">' + esc(CONFIG.SURVEY_QUESTION) + '</div>' +
+      options +
+      '<div class="submit-row" style="justify-content:flex-start;margin-top:14px">' +
+        '<button type="button" class="btn btn--primary" data-action="sendSurvey"' +
+          (state.survey ? '' : ' disabled') + '>Wyślij ocenę</button>' +
+      '</div>' +
+      '<div class="survey-note">W prototypie odpowiedź nie jest nigdzie zapisywana ani wysyłana.</div>';
+  }
+
+  // Odpowiednik okna „Dokumenty wysłane pomyślnie" z formularza produkcyjnego.
+  // Treść na życzenie biznesu mówi o wysłaniu zgłoszenia, choć prototyp nadal tylko
+  // buduje i pobiera plik .eml - wysłanie zostaje po stronie użytkownika (decyzja D5).
+  function viewDoneModal() {
+    return '<div class="modal-bg" data-action="closeModal">' +
+      '<div class="modal" data-stop="1" role="dialog" aria-modal="true" aria-label="Wiadomość jest gotowa">' +
+        '<div class="modal-head modal-head--blue">' +
+          '<h3>Wiadomość jest gotowa</h3>' +
+          '<button type="button" class="modal-x" data-action="closeModal" aria-label="Zamknij">✕</button>' +
+        '</div>' +
+        '<div class="modal-body">' +
+          '<p>Zgłoszenie zostało wysłane.</p>' +
+          '<div class="modal-rule"></div>' +
+          viewSurvey() +
+        '</div>' +
+        '<div class="modal-foot">' +
+          '<button type="button" class="btn btn--ghost" data-action="downloadEml">Pobierz ponownie</button>' +
+          '<button type="button" class="btn btn--primary" data-action="reset">Prześlij kolejne obciążenie</button>' +
+        '</div>' +
+      '</div>' +
+      '</div>';
+  }
+
+  function viewModal() {
+    if (state.modal === 'confirm') return viewConfirmModal();
+    if (state.modal === 'done') return viewDoneModal();
+    return '';
+  }
+
+  function viewToast() {
+    return toast ? '<div class="toast" role="status">' + esc(toast) + '</div>' : '';
+  }
+
+  function view() {
+    // Reszta formularza istnieje dopiero po weryfikacji - do tego czasu na
+    // stronie stoi sama sekcja z NIP-em, numerem zlecenia i CAPTCHA.
+    var rest = state.verified
+      ? viewCharge() + viewContact() + viewDocuments() + viewSummary()
+      : '';
+
+    return '<div class="wrap layout">' +
+      '<div class="column">' +
+        viewIntro() +
+        viewVerification() +
+        rest +
+      '</div>' +
+      '<div class="column">' + viewAside() + '</div>' +
+      '</div>' +
+      viewModal() + viewToast();
+  }
+
+  /* ==========================================================================
+     AKCJE
+     ========================================================================== */
+
+  var actions = {
+    // Otwarcie dalszej części formularza. Dane weryfikacyjne zostają zablokowane,
+    // dopóki użytkownik nie naciśnie „Zmień dane".
+    verify: function () {
+      var errors = validateVerification(state);
+      state.errors = errors;
+      var names = Object.keys(errors);
+      if (names.length) {
+        render();
+        focusError(names[0]);
+        return;
+      }
+      state.verified = true;
+      render();
+      var next = document.querySelectorAll('.card')[1];
+      if (next) next.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    },
+
+    editVerification: function () {
+      state.verified = false;
+      state.errors = {};
+      render();
+      focusError('nip');
+    },
+
+    toggleCaptcha: function () {
+      state.captcha = !state.captcha;
+      delete state.errors.captcha;
+      render();
+    },
+
+    toggleRodo: function () {
+      state.rodo = !state.rodo;
+      delete state.errors.rodo;
+      render();
+    },
+
+    removeFile: function (target) {
+      state.files.splice(Number(target.getAttribute('data-index')), 1);
+      delete state.errors.files;
+      render();
+    },
+
+    submit: function () {
+      var errors = validate(state);
+      state.errors = errors;
+      var names = Object.keys(errors);
+      if (names.length) {
+        render();
+        focusError(names[0]);
+        return;
+      }
+      state.modal = 'confirm';
+      render();
+    },
+
+    confirmSubmit: function () {
+      state.modal = 'done';
+      render();
+      actions.downloadEml();
+    },
+
+    // Zamyka okno kliknięciem w tło, w krzyżyk i w przycisk „Nie".
+    // Kliknięcie w treść okna nie zamyka go, choć zdarzenie dochodzi do tła.
+    closeModal: function (target, clicked) {
+      var inside = clicked.closest('[data-stop]');
+      if (inside && !inside.contains(target)) return;
+      state.modal = '';
+      render();
+    },
+
+    downloadEml: function () {
+      notice('Przygotowuję wiadomość…');
+      buildEml(state).then(function (content) {
+        var blob = new Blob([content], { type: 'message/rfc822' });
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement('a');
+        link.href = url;
+        link.download = emlFileName(state);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+        notice('Wiadomość pobrana. Otwórz pobrany plik - program pocztowy pokaże ją gotową do wysłania.');
+      }, function () {
+        notice('Nie udało się zbudować wiadomości. Sprawdź rozmiar załączników i spróbuj ponownie.');
+      });
+    },
+
+    sendSurvey: function () {
+      state.surveySent = true;
+      render();
+    },
+
+    reset: function () {
+      state = emptyState();
+      render();
+      window.scrollTo(0, 0);
+    }
+  };
+
+  /* ==========================================================================
+     RENDEROWANIE I ZDARZENIA
+     ========================================================================== */
+
+  var app = document.getElementById('app');
+  if (!app) return;
+
+  // Pola, których zmiana przebudowuje widok: rola decyduje o tym, który numer
+  // zlecenia jest widoczny i czy powód obciążenia jest obowiązkowy. Reszta pól
+  // aktualizuje stan po cichu, żeby przerysowanie nie zabierało kursora (D2).
+  var RERENDER_ON_CHANGE = ['role'];
+
+  function render() {
+    app.innerHTML = view();
+  }
+
+  function focusError(name) {
+    var field = document.getElementById('f-' + name);
+    var anchor = field || document.querySelector('.err');
+    if (!anchor) return;
+    anchor.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (field) field.focus({ preventScroll: true });
+  }
+
+  // Usunięcie komunikatu błędu bez przerysowania całego widoku.
+  function clearError(name) {
+    if (!state.errors[name]) return;
+    delete state.errors[name];
+    var field = document.getElementById('f-' + name);
+    var wrapper = field && field.closest('.field');
+    var message = wrapper && wrapper.querySelector('.err');
+    if (message) message.parentNode.removeChild(message);
+  }
+
+  document.addEventListener('click', function (event) {
+    var target = event.target.closest('[data-action]');
+    if (!target) return;
+    var handler = actions[target.getAttribute('data-action')];
+    if (!handler) return;
+    event.preventDefault();
+    // Drugi argument to faktycznie kliknięty element - okno dialogowe rozróżnia
+    // po nim kliknięcie w tło od kliknięcia w treść okna.
+    handler(target, event.target);
+  });
+
+  // Dołożenie plików do listy załączników. Pliki nigdzie nie wychodzą -
+  // zostają w pamięci karty, bo wiadomość .eml niesie ich treść.
+  function addFiles(fileList) {
+    var added = Array.prototype.slice.call(fileList).map(function (file) {
+      var ext = fileExt(file.name);
+      return { name: file.name, size: file.size, ext: ext, valid: extAllowed(ext), file: file };
+    });
+
+    state.files = state.files.concat(added);
+    delete state.errors.files;
+
+    if (added.some(function (file) { return !file.valid; })) {
+      state.errors.files = 'Dopuszczone są wyłącznie pliki ' + extList() +
+        '. Pliki w innym formacie zostały odrzucone.';
+    } else if (overLimit(state.files)) {
+      state.errors.files = 'Łączny rozmiar plików przekracza limit ' + limitLabel() +
+        '. Zmniejsz lub usuń załączniki.';
+    }
+
+    render();
+  }
+
+  document.addEventListener('change', function (event) {
+    var field = event.target;
+
+    if (field.type === 'file') {
+      if (field.files && field.files.length) addFiles(field.files);
+      field.value = '';
+      return;
+    }
+
+    if (field.name === 'survey') {
+      state.survey = field.value;
+      render();
+      return;
+    }
+
+    if (!field.name || field.type === 'checkbox') return;
+    if (!Object.prototype.hasOwnProperty.call(state, field.name)) return;
+
+    state[field.name] = field.value;
+    clearError(field.name);
+
+    // Zmiana roli chowa pole numeru zlecenia drugiej strony - wartość nie może
+    // zostać w stanie, bo trafiłaby do wiadomości.
+    if (field.name === 'role') {
+      if (state.role === 'KLIENT') state.carrierOrder = '';
+      else state.clientOrder = '';
+      delete state.errors.role;
+      delete state.errors.reason;
+    }
+
+    if (RERENDER_ON_CHANGE.indexOf(field.name) > -1) render();
+  });
+
+  // Przeciąganie plików na kafelek kategorii.
+  document.addEventListener('dragover', function (event) {
+    var slot = event.target.closest('.slot');
+    if (!slot) return;
+    event.preventDefault();
+    slot.classList.add('is-over');
+  });
+
+  document.addEventListener('dragleave', function (event) {
+    var slot = event.target.closest('.slot');
+    if (slot) slot.classList.remove('is-over');
+  });
+
+  document.addEventListener('drop', function (event) {
+    var slot = event.target.closest('.slot');
+    if (!slot) return;
+    event.preventDefault();
+    slot.classList.remove('is-over');
+    var files = event.dataTransfer && event.dataTransfer.files;
+    if (files && files.length) addFiles(files);
+  });
+
+  // Escape zamyka okno dialogowe, Enter w polu tekstowym nie wysyła formularza
+  // przypadkiem - zgłoszenie idzie wyłącznie przyciskiem Wyślij.
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && state.modal) {
+      state.modal = '';
+      render();
+      return;
+    }
+    if (event.key !== 'Enter') return;
+    var field = event.target;
+    if (field.tagName !== 'INPUT' || field.type === 'file') return;
+    event.preventDefault();
+
+    // Przed weryfikacją Enter działa jak przycisk Dalej. Zdarzenie keydown
+    // wyprzedza change, więc wartość pola trzeba przepisać do stanu ręcznie.
+    if (state.verified) return;
+    if (field.name && Object.prototype.hasOwnProperty.call(state, field.name)) {
+      state[field.name] = field.value;
+    }
+    actions.verify();
+  });
+
+  /* ==========================================================================
+     DIAGNOSTYKA - reguły wystawione do konsoli przeglądarki
+     ========================================================================== */
+
+  window.PortalNotyFormularz = {
+    CONFIG: CONFIG,
+    state: function () { return state; },
+    rules: {
+      requiredFor: requiredFor,
+      checkNip: checkNip,
+      validateVerification: validateVerification,
+      validate: validate,
+      blockers: blockers,
+      buildSubject: buildSubject,
+      buildBody: buildBody,
+      bodyText: bodyText,
+      bodyHtml: bodyHtml,
+      buildEml: buildEml
+    }
+  };
+
+  render();
+})();
+</script>
+</body>
+</html>
